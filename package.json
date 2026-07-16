@@ -1,0 +1,48 @@
+{
+  "name": "studently",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "prisma generate && tsx scripts/prePushCleanup.ts && prisma db push --skip-generate --accept-data-loss && tsx scripts/setupSearchIndex.ts && next build",
+    "start": "next start",
+    "lint": "next lint",
+    "db:generate": "prisma generate",
+    "db:pre-push-cleanup": "tsx scripts/prePushCleanup.ts",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "db:seed": "node prisma/seed.mjs",
+    "db:search-index": "tsx scripts/setupSearchIndex.ts",
+    "aggregate": "tsx scripts/runAggregationOnce.ts",
+    "worker": "tsx scripts/worker.ts"
+  },
+  "overrides": {
+    "postcss": "^8.5.16"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.18.0",
+    "bcryptjs": "^3.0.3",
+    "cheerio": "^1.2.0",
+    "jose": "^6.2.3",
+    "lucide-react": "^0.383.0",
+    "next": "15.5.20",
+    "node-cron": "^4.6.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "rss-parser": "^3.13.0",
+    "tsx": "^4.23.1",
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^20.14.9",
+    "@types/node-cron": "^3.0.11",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.5.16",
+    "prisma": "^5.18.0",
+    "tailwindcss": "^3.4.6",
+    "typescript": "^5.5.4"
+  }
+}

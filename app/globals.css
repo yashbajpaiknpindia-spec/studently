@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  scroll-behavior: smooth;
+}
+
+html, body {
+  /* Prevent any wide element from ever creating horizontal scroll/cutoff on mobile */
+  overflow-x: hidden;
+  max-width: 100%;
+}
+
+body {
+  @apply bg-white text-ink antialiased;
+}
+
+/* Safe-area utilities so content never sits under a notch, status bar, or home indicator */
+.safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.pb-safe {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem);
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #f1eefc 25%, #e5e0fb 37%, #f1eefc 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #ede9fe;
+  border-radius: 999px;
+}

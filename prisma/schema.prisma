@@ -1,0 +1,494 @@
+// Studently — Prisma schema
+// Run `npx prisma generate` after setting DATABASE_URL in .env.local
+// Run `npx prisma migrate dev --name init` to create the database
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Users & Auth
+// ---------------------------------------------------------------------------
+
+enum Role {
+  STUDENT
+  ADMIN
+  SPONSOR
+}
+
+model User {
+  id            String   @id @default(cuid())
+  phone         String?  @unique
+  email         String?  @unique
+  passwordHash  String?
+  googleId      String?  @unique // Google's stable account "sub" — set when signed up/linked via Google OAuth
+  avatarUrl     String?
+  role          Role     @default(STUDENT)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  student       Student?
+
+  @@index([role])
+}
+
+model Student {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  fullName          String
+  city              String?
+  qualification     String?
+  institution       String?
+  branch            String?
+
+  profileCompletion Int      @default(0)   // 0-100
+  eligibilityScore  Int      @default(0)   // 0-100
+  resumeScore       Int      @default(0)   // 0-100
+  xp                Int      @default(0)
+  level             Int      @default(1)
+  currentStreak     Int      @default(0)
+  longestStreak     Int      @default(0)
+  referralCode      String   @unique @default(cuid())
+  referredById      String?
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  testAttempts      TestAttempt[]
+  applications      Application[]
+  savedItems        SavedItem[]
+  notifications     Notification[]
+  badges            StudentBadge[]
+
+  @@index([eligibilityScore])
+}
+
+// ---------------------------------------------------------------------------
+// Scholarships
+// ---------------------------------------------------------------------------
+
+enum ScholarshipStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+  EXPIRED   // deadline passed or source no longer reports it — set automatically by the aggregation engine's expiry sweep, distinct from CLOSED (an admin decision)
+}
+
+// Distinguishes scholarships funded and awarded by Studently itself (from weekly
+// test pools) from real, external scholarships sourced from government or private
+// programmes. This is a user-facing distinction, not just internal bookkeeping.
+enum ScholarshipSource {
+  STUDENTLY_WEEKLY     // funded by Studently's own weekly test scholarship pool
+  GOVERNMENT           // real government scheme (e.g. via National Scholarship Portal)
+  PRIVATE              // real private/corporate scholarship (e.g. Reliance Foundation)
+  AGGREGATED           // pulled in automatically by the Opportunity Aggregation Engine; providerName/officialUrl identify the real source
+}
+
+model Scholarship {
+  id             String            @id @default(cuid())
+  title          String
+  sponsorId      String?
+  sponsor        Sponsor?          @relation(fields: [sponsorId], references: [id])
+  amount         Int
+  qualification  String
+  location       String            @default("All India")
+  description    String            @default("")
+  deadline       DateTime
+
+  source         ScholarshipSource @default(STUDENTLY_WEEKLY)
+  providerName   String?           // e.g. "National Scholarship Portal (Govt. of India)", "Reliance Foundation"
+  officialUrl    String?           // link to the real, official application page — required for GOVERNMENT/PRIVATE/AGGREGATED
+  status         ScholarshipStatus @default(PUBLISHED)
+  verified       Boolean           @default(true)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  // --- Opportunity Aggregation Engine fields (all null for manually-created rows) ---
+  ingestSourceId String?           // Source.id that produced this row
+  ingestSource   Source?           @relation(fields: [ingestSourceId], references: [id])
+  externalId     String?           // the listing's stable ID/URL at the origin, used to upsert instead of duplicate
+  dedupHash      String?           // normalized hash of title+provider+qualification, used for cross-source fuzzy dedup
+  rawPayload     Json?             // the untouched raw record as fetched, kept for audits/debugging
+  aiTags         String[]          @default([]) // AI-extracted keywords/eligibility tags, used by the recommender
+  lastSeenAt     DateTime?         // last time this listing was re-confirmed present at the source; drives auto-expiry
+  searchText     String            @default("") // flattened text the full-text search index is built from
+  tsv            Unsupported("tsvector")? // generated column (see migration SQL), indexed with GIN for search.ts
+
+  applications   Application[]
+
+  @@unique([ingestSourceId, externalId])
+  @@index([status])
+  @@index([deadline])
+  @@index([source])
+  @@index([dedupHash])
+  @@index([lastSeenAt])
+}
+
+// ---------------------------------------------------------------------------
+// Jobs & Internships
+// ---------------------------------------------------------------------------
+
+enum ListingType {
+  FRESHER
+  INTERNSHIP
+  REMOTE
+  CAMPUS
+  STARTUP
+  GOVERNMENT
+}
+
+enum ListingStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+  EXPIRED   // deadline passed or source no longer reports it — set automatically by the aggregation engine's expiry sweep, distinct from CLOSED (an admin decision)
+}
+
+// Mirrors ScholarshipSource: distinguishes listings Studently itself curates/verifies
+// in-app from real external government exams/schemes and portals, where the actual
+// application happens on someone else's site.
+enum JobSource {
+  STUDENTLY_CURATED
+  GOVERNMENT_EXAM
+  GOVERNMENT_SCHEME
+  EXTERNAL_PORTAL
+  AGGREGATED           // pulled in automatically by the Opportunity Aggregation Engine; providerName/officialUrl identify the real source
+}
+
+model Job {
+  id            String        @id @default(cuid())
+  role          String
+  company       String
+  location      String
+  salary        String
+  type          ListingType
+  employmentTerm String       @default("Full-time")
+  description   String        @default("")
+  status        ListingStatus @default(PUBLISHED)
+
+  source        JobSource     @default(STUDENTLY_CURATED)
+  providerName  String?
+  officialUrl   String?
+  applicationDeadline DateTime?
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  // --- Opportunity Aggregation Engine fields (all null for manually-created rows) ---
+  ingestSourceId String?
+  ingestSource  Source?       @relation(fields: [ingestSourceId], references: [id])
+  externalId    String?
+  dedupHash     String?
+  rawPayload    Json?
+  aiTags        String[]      @default([])
+  lastSeenAt    DateTime?
+  searchText    String        @default("")
+  tsv           Unsupported("tsvector")? // generated column (see migration SQL), indexed with GIN for search.ts
+
+  applications  Application[]
+
+  @@unique([ingestSourceId, externalId])
+  @@index([type])
+  @@index([status])
+  @@index([source])
+  @@index([dedupHash])
+  @@index([lastSeenAt])
+}
+
+// ---------------------------------------------------------------------------
+// Opportunity Aggregation Engine
+//
+// Source = a registered feed/API/partnership the background workers pull from.
+// IngestRun = an audit log row for every time a worker actually ran a Source.
+// Never used for unauthorized scraping of third-party platforms (e.g. LinkedIn,
+// WorkIndia) — every SourceKind below is either an official public API, a
+// permitted feed, a direct partner integration, or a government/university
+// notice board fetched in line with robots.txt.
+// ---------------------------------------------------------------------------
+
+enum SourceKind {
+  GREENHOUSE_API   // official public Greenhouse Job Board API (boards-api.greenhouse.io)
+  LEVER_API        // official public Lever Postings API (api.lever.co)
+  RSS_FEED         // any org's published RSS/Atom feed
+  JSON_API         // a generic REST/JSON API (government open-data portals, partner APIs)
+  PARTNER_FEED     // a structured JSON/CSV feed supplied directly by a partner under agreement
+  NOTICE_BOARD     // a government/university public notice-board page, fetched read-only and respecting robots.txt
+  AI_DEEP_SEARCH   // admin-triggered: Claude (with the web_search tool) searches the open web for listings matching a query, extracts + normalizes them in one pass. config holds { query, locations?, keywords?, maxResults? }.
+}
+
+enum SourceTargetType {
+  JOB
+  INTERNSHIP
+  SCHOLARSHIP
+}
+
+model Source {
+  id                String            @id @default(cuid())
+  name              String            // human-readable, e.g. "GitLab — Greenhouse"
+  kind              SourceKind
+  targetType        SourceTargetType
+  url               String            // feed/API base URL
+  config            Json              @default("{}") // connector-specific options: field mappings, CSS selectors, API keys env-var name, query params
+  enabled           Boolean           @default(true)
+  fetchIntervalMins Int               @default(360)  // how often the scheduler should run this source (default: every 6h)
+
+  lastRunAt         DateTime?
+  lastSuccessAt     DateTime?
+  lastError         String?
+
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  runs              IngestRun[]
+  jobs              Job[]
+  scholarships      Scholarship[]
+
+  @@index([enabled, targetType])
+}
+
+enum IngestRunStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+model IngestRun {
+  id            String          @id @default(cuid())
+  sourceId      String
+  source        Source          @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  status        IngestRunStatus @default(RUNNING)
+  startedAt     DateTime        @default(now())
+  finishedAt    DateTime?
+  itemsFetched  Int             @default(0)
+  itemsCreated  Int             @default(0)
+  itemsUpdated  Int             @default(0)
+  itemsSkipped  Int             @default(0) // duplicates or failed AI normalization
+  itemsExpired  Int             @default(0) // stale listings closed out in the same cycle
+  error         String?
+
+  // --- AI cost tracking (populated for any run that made Claude API calls —
+  // both the AI_DEEP_SEARCH connector itself and the normalizeWithAI pass
+  // every source, including non-AI connectors, runs afterwards) ---
+  aiInputTokens  Int   @default(0)
+  aiOutputTokens Int   @default(0)
+  aiWebSearches  Int   @default(0)   // count of billable web_search tool invocations (AI_DEEP_SEARCH only)
+  aiCostUsd      Float @default(0)   // token cost + web-search cost, computed at the pricing in lib/aggregator/aiCost.ts
+
+  @@index([sourceId, startedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Weekly Scholarship Tests
+// ---------------------------------------------------------------------------
+
+
+enum TestCategory {
+  COLLEGE
+  BANKING
+  SSC
+  UPSC
+  JEE
+  NEET
+  SCHOOL
+}
+
+model WeeklyTest {
+  id            String        @id @default(cuid())
+  title         String
+  category      TestCategory
+  weekNumber    Int
+  startsAt      DateTime
+  endsAt        DateTime
+  durationMins  Int           @default(45)
+  scholarshipPoolAmount Int   @default(0)
+  createdAt     DateTime      @default(now())
+
+  questions     Question[]
+  attempts      TestAttempt[]
+
+  @@index([category, weekNumber])
+}
+
+model Question {
+  id           String     @id @default(cuid())
+  testId       String
+  test         WeeklyTest @relation(fields: [testId], references: [id], onDelete: Cascade)
+  text         String
+  options      String[]
+  correctIndex Int
+  order        Int        @default(0)
+
+  @@index([testId])
+}
+
+model TestAttempt {
+  id           String     @id @default(cuid())
+  studentId    String
+  student      Student    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  testId       String
+  test         WeeklyTest @relation(fields: [testId], references: [id], onDelete: Cascade)
+
+  answers      Json       // { questionId: selectedIndex }
+  score        Int        @default(0)
+  rank         Int?
+  submittedAt  DateTime?
+  ipAddress    String?
+  deviceHash   String?
+  flaggedFraud Boolean    @default(false)
+
+  createdAt    DateTime   @default(now())
+
+  @@unique([studentId, testId])
+  @@index([testId, score])
+}
+
+// ---------------------------------------------------------------------------
+// Applications & Saved items (unifies scholarship + job applications)
+// ---------------------------------------------------------------------------
+
+enum ApplicationStatus {
+  APPLIED
+  UNDER_REVIEW
+  INTERVIEW
+  SELECTED
+  REJECTED
+}
+
+model Application {
+  id            String             @id @default(cuid())
+  studentId     String
+  student       Student            @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  scholarshipId String?
+  scholarship   Scholarship?       @relation(fields: [scholarshipId], references: [id])
+  jobId         String?
+  job           Job?               @relation(fields: [jobId], references: [id])
+  status        ApplicationStatus  @default(APPLIED)
+  appliedAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([studentId])
+  @@index([status])
+}
+
+model SavedItem {
+  id            String   @id @default(cuid())
+  studentId     String
+  student       Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  scholarshipId String?
+  jobId         String?
+  createdAt     DateTime @default(now())
+
+  @@index([studentId])
+}
+
+// ---------------------------------------------------------------------------
+// Sponsors & Payments
+// ---------------------------------------------------------------------------
+
+model Sponsor {
+  id            String        @id @default(cuid())
+  name          String
+  logoUrl       String?
+  totalPledged  Int           @default(0)
+  totalDisbursed Int          @default(0)
+  createdAt     DateTime      @default(now())
+
+  scholarships  Scholarship[]
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum PaymentProvider {
+  RAZORPAY
+  UPI
+  CARD
+  NETBANKING
+}
+
+model Payment {
+  id              String          @id @default(cuid())
+  userId          String
+  amount          Int
+  currency        String          @default("INR")
+  provider        PaymentProvider
+  status          PaymentStatus   @default(PENDING)
+  razorpayOrderId String?
+  razorpayPaymentId String?
+  planName        String          @default("Premium Monthly")
+  createdAt       DateTime        @default(now())
+
+  @@index([userId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Gamification
+// ---------------------------------------------------------------------------
+
+model Badge {
+  id          String         @id @default(cuid())
+  name        String         @unique
+  description String
+  iconKey     String
+  students    StudentBadge[]
+}
+
+model StudentBadge {
+  id        String   @id @default(cuid())
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  badgeId   String
+  badge     Badge    @relation(fields: [badgeId], references: [id])
+  earnedAt  DateTime @default(now())
+
+  @@unique([studentId, badgeId])
+}
+
+// ---------------------------------------------------------------------------
+// Notifications & Fraud
+// ---------------------------------------------------------------------------
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  PUSH
+  IN_APP
+}
+
+model Notification {
+  id        String              @id @default(cuid())
+  studentId String
+  student   Student             @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  channel   NotificationChannel @default(IN_APP)
+  read      Boolean             @default(false)
+  createdAt DateTime            @default(now())
+
+  @@index([studentId, read])
+}
+
+model FraudFlag {
+  id          String   @id @default(cuid())
+  entityType  String   // "TestAttempt" | "Application" | "Student"
+  entityId    String
+  reason      String
+  severity    String   @default("LOW") // LOW | MEDIUM | HIGH
+  resolved    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([resolved])
+}
